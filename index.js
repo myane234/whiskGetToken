@@ -2,9 +2,11 @@ import fs from "fs";
 import path from "path";
 import puppeteer from "puppeteer";
 
-const PROFILE_DIR = "D:/chrome-profiles"; // folder tempat semua profile
-const TOKEN_TIMEOUT = 20000; // ms max tunggu token
-const DELAY_BETWEEN = 3000; // ms delay antar profile
+const PROFILE_DIR = "D:/chrome-profiles";
+const TOKEN_TIMEOUT = 20000;
+const DELAY_BETWEEN = 3000;
+
+const outputFile = path.join("D:", "tokens.txt");
 
 async function grabToken(profile) {
   console.log(`Launch ${profile}`);
@@ -12,6 +14,7 @@ async function grabToken(profile) {
   const profilePath = path.join(PROFILE_DIR, profile);
 
   let browser;
+
   try {
     browser = await puppeteer.launch({
       headless: false,
@@ -26,27 +29,37 @@ async function grabToken(profile) {
     });
 
     const page = await browser.newPage();
+
     let token = null;
 
-    // tangkap token dari response
     page.on("response", async (res) => {
       if (res.url().includes("/api/auth/session") && !token) {
         try {
           const data = await res.json();
-          token = data.access_token;
+          if (data.access_token) {
+            token = data.access_token;
+          }
         } catch {}
       }
     });
 
-    
     await page.goto(
       "https://labs.google/fx/tools/whisk/project",
       { waitUntil: "domcontentloaded" }
     );
 
-    const start = Date.now();
-    while (!token && Date.now() - start < TOKEN_TIMEOUT) {
-      await new Promise((r) => setTimeout(r, 500));
+    // refresh sampai 3 kali kalau belum dapat token
+    for (let i = 0; i < 3 && !token; i++) {
+
+      console.log(`${profile} refresh ${i + 1}`);
+
+      await page.reload({ waitUntil: "networkidle2" });
+
+      const start = Date.now();
+
+      while (!token && Date.now() - start < TOKEN_TIMEOUT) {
+        await new Promise((r) => setTimeout(r, 500));
+      }
     }
 
     if (token) {
@@ -57,16 +70,21 @@ async function grabToken(profile) {
 
     await page.close();
     await browser.close();
+
     return token;
 
   } catch (err) {
-    console.log(` Error profile ${profile}:`, err.message);
+
+    console.log(`Error profile ${profile}:`, err.message);
+
     if (browser) await browser.close().catch(() => {});
+
     return null;
   }
 }
 
 async function main() {
+
   const profiles = fs.readdirSync(PROFILE_DIR).filter((f) =>
     fs.statSync(path.join(PROFILE_DIR, f)).isDirectory()
   );
@@ -74,21 +92,22 @@ async function main() {
   const tokens = [];
 
   for (const profile of profiles) {
+
     const token = await grabToken(profile);
 
     if (token) tokens.push(token);
 
-    // delay biar Windows release folder
     await new Promise((r) => setTimeout(r, DELAY_BETWEEN));
   }
 
-  
   const merged = tokens.join(",");
 
   console.log("\nALL TOKENS:");
   console.log(merged);
 
-  fs.writeFileSync("tokens.txt", merged);
+  fs.writeFileSync(outputFile, merged, "utf8");
+
+  console.log(`Token di simpan di ${outputFile}`);
 }
 
 main();
